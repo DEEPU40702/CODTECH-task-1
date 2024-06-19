@@ -1,0 +1,100 @@
+import RPi.GPIO as GPIO
+import Adafruit_DHT
+import time
+import paho.mqtt.client as mqtt
+
+# GPIO pin numbers
+LED_PIN = 17
+BUZZER_PIN = 18
+MOTOR_PIN = 27
+PIR_PIN = 22
+LDR_PIN = 4
+
+# DHT sensor setup
+DHT_SENSOR = Adafruit_DHT.DHT22
+DHT_PIN = 23
+
+# MQTT Broker (change these to your MQTT broker details)
+MQTT_BROKER = "mqtt.example.com"
+MQTT_PORT = 1883
+MQTT_TOPIC = "home/automation"
+
+# Initialize GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(LED_PIN, GPIO.OUT)
+GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.setup(MOTOR_PIN, GPIO.OUT)
+GPIO.setup(PIR_PIN, GPIO.IN)
+GPIO.setup(LDR_PIN, GPIO.IN)
+
+# MQTT client setup
+client = mqtt.Client()
+
+def read_temperature_humidity():
+    humidity, temperature = Adafruit_DHT.read_retry(DHT_SENSOR, DHT_PIN)
+    if humidity is not None and temperature is not None:
+        return temperature, humidity
+    else:
+        return None, None
+
+def read_light_level():
+    return GPIO.input(LDR_PIN)
+
+def motion_detected():
+    return GPIO.input(PIR_PIN)
+
+def control_devices(temp, hum, light_level, motion):
+    if temp is not None and hum is not None:
+        if temp > 30.0 or hum > 70:
+            GPIO.output(LED_PIN, GPIO.HIGH)  # Turn on LED
+            client.publish(MQTT_TOPIC, "Temperature or humidity is high.")
+        else:
+            GPIO.output(LED_PIN, GPIO.LOW)   # Turn off LED
+
+    if light_level == GPIO.LOW:
+        client.publish(MQTT_TOPIC, "Low light detected.")
+
+    if motion == GPIO.HIGH:
+        GPIO.output(BUZZER_PIN, GPIO.HIGH)  # Sound buzzer
+        client.publish(MQTT_TOPIC, "Motion detected.")
+        time.sleep(5)
+        GPIO.output(BUZZER_PIN, GPIO.LOW)
+
+def on_connect(client, userdata, flags, rc):
+    print("Connected with result code "+str(rc))
+    client.subscribe(MQTT_TOPIC + "/control")
+
+def on_message(client, userdata, msg):
+    if msg.topic == MQTT_TOPIC + "/control":
+        message = msg.payload.decode()
+        if message == "lock":
+            GPIO.output(MOTOR_PIN, GPIO.HIGH)  # Lock the door
+            client.publish(MQTT_TOPIC, "Door locked.")
+        elif message == "unlock":
+            GPIO.output(MOTOR_PIN, GPIO.LOW)   # Unlock the door
+            client.publish(MQTT_TOPIC, "Door unlocked.")
+
+# Set MQTT callbacks
+client.on_connect = on_connect
+client.on_message = on_message
+
+# Connect to MQTT broker
+client.connect(MQTT_BROKER, MQTT_PORT, 60)
+
+# Start MQTT loop
+client.loop_start()
+
+try:
+    while True:
+        temperature, humidity = read_temperature_humidity()
+        light_level = read_light_level()
+        motion = motion_detected()
+        control_devices(temperature, humidity, light_level, motion)
+        time.sleep(2)
+
+except KeyboardInterrupt:
+    print("Program stopped by user")
+
+finally:
+    client.loop_stop()
+    GPIO.cleanup()
